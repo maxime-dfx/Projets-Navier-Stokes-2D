@@ -9,9 +9,6 @@ class Function {
 private:
     DataFile* _df;
 
-    // Helper pour condition initiale
-    double ComputeSingleVortex(double x, double y, double x0, double y0, double R, double A, bool is_u);
-
 public:
     Function(DataFile* data_file); 
 
@@ -37,8 +34,8 @@ public:
     // Ex: Lid-Driven Cavity -> Le mur du haut glisse.
     
     // Mur Gauche/Droit : La vitesse tangentielle est V (Verticale)
-    double GetLeftV_Tangent(double y)   const { return _df->Get_BC_Left_dir(); }
-    double GetRightV_Tangent(double y)  const { return _df->Get_BC_Right_dir(); } 
+    double GetLeftV_Tangent(double y)   const { return 0.0; }
+    double GetRightV_Tangent(double y)  const { return 0.0; } 
 
     // Mur Bas/Haut : La vitesse tangentielle est U (Horizontale)
     double GetBottomU_Tangent(double x) const { return _df->Get_BC_Bottom_dir(); } // Correction: Bottom

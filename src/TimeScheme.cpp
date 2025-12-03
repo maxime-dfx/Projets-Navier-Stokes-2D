@@ -20,7 +20,7 @@ TimeScheme(data_file, lap, grid)
 {}
 
 // =========================================================================
-// APPLICATION DES CONDITIONS AUX LIMITES (Vitesse Normale / Étanchéité)
+// APPLICATION DES CONDITIONS AUX LIMITES
 // =========================================================================
 void TimeScheme::ApplyBoundaryConditions()
 {
@@ -31,43 +31,73 @@ void TimeScheme::ApplyBoundaryConditions()
     VectorXd V = _grid->GetV();
     Function* fct = _grid->GetFunction();
 
-    // 1. MURS VERTICAUX (On impose U, la vitesse normale traversante)
+    // -----------------------------------------------------------
+    // 1. MURS VERTICAUX (Gauche / Droite)
+    // -----------------------------------------------------------
     for (int i = 0; i < Ny; ++i) {
-        // Mur GAUCHE (Indice 0)
+        // --- Mur GAUCHE (Entrée) ---
         int k_left = _grid->GetUIndex(i, 0);
-        double y_left = _grid->GetUcoord(i, 0)(1); // Coord Y
-        if (fct->IsDirichletLeft()) 
-            U(k_left) = fct->GetLeftU_Normal(y_left); 
-        else 
-            U(k_left) = U(_grid->GetUIndex(i, 1)); 
+        double y_left = _grid->GetUcoord(i, 0)(1); // Coord Y pour le profil
+        
+        if (fct->IsDirichletLeft()) {
+            double u_imposed = fct->GetLeftU_Normal(y_left);
 
-        // Mur DROIT (Indice Nx)
+            // [NOUVEAU] AJOUT DE BRUIT POUR CASSER LA SYMÉTRIE
+            // On ajoute une perturbation aléatoire de +/- 2%
+            // Formule : valeur * (1 + intensité * (random(-1..1)))
+            double noise_intensity = 0.02; 
+            double random_factor = ((double)std::rand() / RAND_MAX) * 2.0 - 1.0; 
+            
+            U(k_left) = u_imposed * (1.0 + noise_intensity * random_factor);
+        } 
+        else {
+            // Neumann (Copie la valeur voisine)
+            U(k_left) = U(_grid->GetUIndex(i, 1)); 
+        }
+
+        // --- Mur DROIT (Sortie) ---
         int k_right = _grid->GetUIndex(i, Nx);
         double y_right = _grid->GetUcoord(i, Nx)(1);
-        if (fct->IsDirichletRight()) 
+        
+        if (fct->IsDirichletRight()) {
             U(k_right) = fct->GetRightU_Normal(y_right);
-        else 
+        }
+        else {
+            // Neumann (Sortie libre, on copie la vitesse d'avant)
             U(k_right) = U(_grid->GetUIndex(i, Nx - 1));
+        }
     }
 
-    // 2. MURS HORIZONTAUX (On impose V, la vitesse normale traversante)
+    // -----------------------------------------------------------
+    // 2. MURS HORIZONTAUX (Bas / Haut)
+    // -----------------------------------------------------------
     for (int j = 0; j < Nx; ++j) {
-        // Mur BAS (Indice 0)
+        // --- Mur BAS ---
         int k_bott = _grid->GetVIndex(0, j);
-        double x_bott = _grid->GetVcoord(0, j)(0); // Coord X
-        if (fct->IsDirichletBottom()) 
-            V(k_bott) = fct->GetBottomV_Normal(x_bott);
-        else 
+        double x_bott = _grid->GetVcoord(0, j)(0);
+        
+        if (fct->IsDirichletBottom()) {
+            V(k_bott) = fct->GetBottomV_Normal(x_bott); // Souvent 0.0 (étanche)
+        }
+        else {
+            // Neumann (Free Slip : Vitesse verticale libre)
             V(k_bott) = V(_grid->GetVIndex(1, j));
+        }
 
-        // Mur HAUT (Indice Ny)
+        // --- Mur HAUT ---
         int k_top = _grid->GetVIndex(Ny, j);
         double x_top = _grid->GetVcoord(Ny, j)(0);
-        if (fct->IsDirichletTop()) 
-            V(k_top) = fct->GetTopV_Normal(x_top);
-        else 
+        
+        if (fct->IsDirichletTop()) {
+            V(k_top) = fct->GetTopV_Normal(x_top); // Souvent 0.0
+        }
+        else {
+            // Neumann (Free Slip)
             V(k_top) = V(_grid->GetVIndex(Ny - 1, j));
+        }
     }
+
+    // Mise à jour de la grille
     _grid->SetU(U);
     _grid->SetV(V);
 }
@@ -251,9 +281,37 @@ void EulerScheme::Advance()
     _grid->SetV(v_next);
     _grid->SetP(p_next); 
 
-    ApplyBoundaryConditions();
+    // --- MASQUAGE DE L'OBSTACLE ---
+    // On force la vitesse à 0 à l'intérieur de l'objet solide
+    // C'est brutal mais efficace (Méthode de Pénalisation simple)
+    
+    VectorXd U_final = _grid->GetU();
+    VectorXd V_final = _grid->GetV();
+
+    for (int i = 0; i < Ny; ++i) {
+        for (int j = 0; j <= Nx; ++j) {
+            if (_grid->IsSolidU(i, j)) {
+                U_final(_grid->GetUIndex(i, j)) = 0.0;
+            }
+        }
+    }
+
+    for (int i = 0; i <= Ny; ++i) {
+        for (int j = 0; j < Nx; ++j) {
+            if (_grid->IsSolidV(i, j)) {
+                V_final(_grid->GetVIndex(i, j)) = 0.0;
+            }
+        }
+    }
+
+    _grid->SetU(U_final);
+    _grid->SetV(V_final);
+
+    // ApplyBoundaryConditions(); // (Optionnel: Rappel pour être sûr pour les murs extérieurs)
+    
     _t += dt;
 }
+
 
 // SaveSolution reste inchangé par rapport à ta version, il est correct.
 void TimeScheme::SaveSolution(int n_iteration)

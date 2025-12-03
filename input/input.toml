@@ -1,35 +1,37 @@
 [space]
 xmin = 0.0
-xmax = 1.0
+xmax = 2.0      # Canal long pour voir l'allée se développer
 ymin = 0.0
 ymax = 1.0
-hx = 0.02       # Maillage plus fin (50x50) pour capter la forme des vortex
-hy = 0.02
+hx = 0.01       # Maillage FIN (200x100) pour bien dessiner le rond
+hy = 0.01
 
 [time]
 t0 = 0.0
-tfinal = 2.0    # Temps plus long pour laisser aux vortex le temps d'interagir
-dt = 0.001      # Pas de temps ajusté (attention à la condition CFL)
+tfinal = 10.0   # On laisse tourner longtemps pour voir l'instabilité s'installer
+dt = 0.001      # Pas de temps petit pour la précision (CFL = 0.1)
 scheme = "ExplicitEuler"
 
 [physics]
 rho = 1.0
-nu = 0.0000005      # Viscosité FAIBLE ! C'est la clé pour avoir du mouvement.
+nu = 0.001      # Viscosité CALIBRÉE pour Re=120 (Allée de von Karman stable)
 
 [boundary]
-# Gauche = Vitesse imposée (Dirichlet sur U)
+# --- Entrée (Gauche) ---
 left = "Dirichlet"
-left_val = 1.0      # Vitesse du vent entrant (U_in)
+left_val = 1.0      # Vent constant
 
-# Droite = Sortie libre (Neumann sur U, Dirichlet sur P)
+# --- Sortie (Droite) ---
 right = "Neumann"
-right_val = 0.0     # Gradient nul
+right_val = 0.0     # Sortie libre
 
-# Haut/Bas = Murs solides (Dirichlet sur U et V = 0)
-bottom = "Dirichlet"
-bottom_val = 0.0    # Vitesse paroi (0 pour mur fixe)
-top = "Dirichlet"
-top_val = 0.0       # Vitesse paroi (0 pour mur fixe)
+# --- Parois (Haut/Bas) ---
+# "Neumann" = Glissement libre (comme si le mur était très loin)
+# Idéal pour éviter que les murs n'interfèrent avec les tourbillons
+bottom = "Neumann"
+bottom_val = 0.0 
+top = "Neumann"
+top_val = 0.0
 
 [output]
 results = "results"

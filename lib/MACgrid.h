@@ -17,6 +17,8 @@ private:
     Eigen::VectorXd _p; // Pression aux centres
     Eigen::VectorXd _U; // Vitesse X aux faces verticales
     Eigen::VectorXd _V; // Vitesse Y aux faces horizontales
+    std::vector<bool> _is_solid_u; // Masque pour la grille U
+    std::vector<bool> _is_solid_v; // Masque pour la grille V
 
 public:
     MACgrid(Function* function, DataFile* data_file);
@@ -40,6 +42,10 @@ public:
     Eigen::VectorXd GetPcoord(int i, int j) const;
     Eigen::VectorXd GetUcoord(int i, int j) const;
     Eigen::VectorXd GetVcoord(int i, int j) const;
+
+    void BuildObstacles(); // Fonction pour créer les formes
+    bool IsSolidU(int i, int j) const { return _is_solid_u[GetUIndex(i,j)]; }
+    bool IsSolidV(int i, int j) const { return _is_solid_v[GetVIndex(i,j)]; }
 };
 
 #endif
