@@ -20,6 +20,11 @@ private:
    std::string _bc_bottom;
    std::string _bc_top;
 
+   double _bc_left_dir;
+   double _bc_right_dir;
+   double _bc_bottom_dir;
+   double _bc_top_dir;
+
 public:
    DataFile(std::string file_name);
 
@@ -43,6 +48,10 @@ public:
    std::string Get_BC_Right()  const { return _bc_right; }
    std::string Get_BC_Bottom() const { return _bc_bottom; }
    std::string Get_BC_Top()    const { return _bc_top; }
+   double Get_BC_Left_dir() const { return _bc_left_dir; }
+   double Get_BC_Right_dir() const { return _bc_right_dir; }
+   double Get_BC_Bottom_dir() const { return _bc_bottom_dir; }
+   double Get_BC_Top_dir() const { return _bc_top_dir; }
 };
 
 #endif

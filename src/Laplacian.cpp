@@ -1,5 +1,5 @@
 #include "Laplacian.h"
-#include "DataFile.h" 
+#include "DataFile.h"
 #include "MACgrid.h"
 #include <iostream>
 #include <vector>
@@ -12,6 +12,7 @@ _fct(function), _df(data_file), _grid(grid)
 {
     int Nx = _df->Get_Nx();
     int Ny = _df->Get_Ny();
+    // On redimensionne la matrice
     _H.resize(Nx * Ny, Nx * Ny);
 }
 
@@ -25,75 +26,71 @@ void Laplacian::BuildMatrix()
     double Cy = 1.0 / (hy * hy);
 
     std::vector<Eigen::Triplet<double>> triplets;
-    triplets.reserve(5 * Nx * Ny); 
+    triplets.reserve(5 * Nx * Ny);
 
-    // Point fixé pour rendre la matrice inversible (Pinning)
-    int k_pinned = _grid->GetPIndex(0, 0);
-
-    for (int i = 0; i < Ny; ++i) {       
-        for (int j = 0; j < Nx; ++j) {   
+    for (int i = 0; i < Ny; ++i) {
+        for (int j = 0; j < Nx; ++j) {
             int k = _grid->GetPIndex(i, j);
 
-            // --- 1. PINNING : On force 1.0 sur la diagonale pour le point (0,0) ---
-            if (k == k_pinned) {
-                triplets.push_back(Triplet<double>(k, k, 1.0));
-                continue;
+            // --- 1. SORTIE (Droite) : Pression fixée à 0 (Dirichlet) ---
+            // Condition : j = Nx - 1
+            if (j == Nx - 1) {
+                // Équation triviale : 1 * P_k = 0
+                triplets.push_back(Eigen::Triplet<double>(k, k, 1.0));
+                continue; // On passe au point suivant, pas de voisins connectés
             }
 
-            // --- 2. CHANGEMENT DE SIGNE ---
-            // On construit la matrice opposée (-Laplacien) pour qu'elle soit Positive Définie
-            // Diagonale POSITIVE
+            // --- 2. POINTS INTERNES & AUTRES BORDS ---
             double diag = 2.0 * (Cx + Cy);
 
-            // Voisins NEGATIFS
-            
-            // Ouest
+            // OUEST (Gauche)
             if (j > 0) {
-                int k_W = _grid->GetPIndex(i, j-1);
-                if (k_W != k_pinned) triplets.push_back(Triplet<double>(k, k_W, -Cx));
+                int k_W = _grid->GetPIndex(i, j - 1);
+                triplets.push_back(Eigen::Triplet<double>(k, k_W, -Cx));
             } else {
-                // Mur Neumann : La dérivée nulle supprime le terme,
-                // MAIS on doit réduire la diagonale pour refléter la perte du voisin
-                // (Sinon on simule un Dirichlet implicite = 0)
-                diag -= Cx; 
-            }
-            
-            // Est
-            if (j < Nx - 1) {
-                int k_E = _grid->GetPIndex(i, j+1);
-                if (k_E != k_pinned) triplets.push_back(Triplet<double>(k, k_E, -Cx));
-            } else {
-                diag -= Cx; // Mur Neumann
+                // Mur Gauche / Entrée : Neumann (dP/dx = 0)
+                // Le gradient de pression normal est nul à l'entrée car la vitesse est imposée.
+                diag -= Cx;
             }
 
-            // Sud
+            // EST (Droite)
+            // On vérifie si le voisin de droite est un point interne.
+            // Si j+1 correspond à la frontière de sortie (j+1 == Nx-1), P_{est} vaut 0.
+            // Le terme -Cx * P_{est} s'annule. On ne met donc PAS de coefficient dans la matrice.
+            // Cela préserve la symétrie car la ligne (Nx-1) n'a pas non plus de lien vers (Nx-2).
+            if (j + 1 < Nx - 1) {
+                int k_E = _grid->GetPIndex(i, j + 1);
+                triplets.push_back(Eigen::Triplet<double>(k, k_E, -Cx));
+            }
+
+            // SUD (Bas)
             if (i > 0) {
-                int k_S = _grid->GetPIndex(i-1, j);
-                if (k_S != k_pinned) triplets.push_back(Triplet<double>(k, k_S, -Cy));
+                int k_S = _grid->GetPIndex(i - 1, j);
+                triplets.push_back(Eigen::Triplet<double>(k, k_S, -Cy));
             } else {
-                diag -= Cy; // Mur Neumann
+                // Mur Bas : Neumann (dP/dy = 0)
+                diag -= Cy;
             }
 
-            // Nord
+            // NORD (Haut)
             if (i < Ny - 1) {
-                int k_N = _grid->GetPIndex(i+1, j);
-                if (k_N != k_pinned) triplets.push_back(Triplet<double>(k, k_N, -Cy));
+                int k_N = _grid->GetPIndex(i + 1, j);
+                triplets.push_back(Eigen::Triplet<double>(k, k_N, -Cy));
             } else {
-                diag -= Cy; // Mur Neumann
+                // Mur Haut : Neumann (dP/dy = 0)
+                diag -= Cy;
             }
 
-            triplets.push_back(Triplet<double>(k, k, diag));
+            // Ajout de la diagonale
+            triplets.push_back(Eigen::Triplet<double>(k, k, diag));
         }
     }
+
+    // Construction de la matrice Sparse
     _H.setFromTriplets(triplets.begin(), triplets.end());
 
-    _solver.analyzePattern(_H);
+    // Factorisation (LLT pour matrice symétrique définie positive)
     _solver.compute(_H);
-    
-    if(_solver.info() != Success) {
-        cout << "ERREUR FATALE: Factorisation Cholesky impossible." << endl;
-        exit(1);
-    }
 }
 
 Eigen::VectorXd Laplacian::ComputeDivergence(const Eigen::VectorXd& U, const Eigen::VectorXd& V)
@@ -102,19 +99,23 @@ Eigen::VectorXd Laplacian::ComputeDivergence(const Eigen::VectorXd& U, const Eig
     int Ny = _df->Get_Ny();
     double hx = _df->Get_hx();
     double hy = _df->Get_hy();
-    
+
     Eigen::VectorXd div(Nx * Ny);
-    
+    div.setZero();
+
     for (int i = 0; i < Ny; ++i) {
         for (int j = 0; j < Nx; ++j) {
             int k = _grid->GetPIndex(i, j);
-            
-            double u_right = U(_grid->GetUIndex(i, j + 1));
-            double u_left  = U(_grid->GetUIndex(i, j));
-            double v_top   = V(_grid->GetVIndex(i + 1, j));
-            double v_bott  = V(_grid->GetVIndex(i, j));
-            
-            div(k) = (u_right - u_left)/hx + (v_top - v_bott)/hy;
+
+            int k_u_E = _grid->GetUIndex(i, j + 1);
+            int k_u_W = _grid->GetUIndex(i, j);
+            int k_v_N = _grid->GetVIndex(i + 1, j);
+            int k_v_S = _grid->GetVIndex(i, j);
+
+            double du_dx = (U(k_u_E) - U(k_u_W)) / hx;
+            double dv_dy = (V(k_v_N) - V(k_v_S)) / hy;
+
+            div(k) = du_dx + dv_dy;
         }
     }
     return div;
@@ -122,22 +123,22 @@ Eigen::VectorXd Laplacian::ComputeDivergence(const Eigen::VectorXd& U, const Eig
 
 void Laplacian::Solve(const Eigen::VectorXd& rhs, Eigen::VectorXd& p_sol)
 {
-    // IMPORTANT : Comme on a inversé le signe de la matrice (M = -Laplacien),
-    // on doit inverser le signe du RHS pour résoudre M*p = -rhs
-    // Sinon la pression sera inversée (Haute pression au lieu de basse).
-    
+    // Le système est H * P = - div(u) / dt
+    // Donc b = -rhs
     Eigen::VectorXd b = -rhs;
 
-    // Pour le point pinné (0,0), l'équation est 1*p = 0.
-    // On force donc b(0) à 0 explicitement.
-    int k_pinned = _grid->GetPIndex(0, 0);
-    b(k_pinned) = 0.0;
+    int Nx = _df->Get_Nx();
+    int Ny = _df->Get_Ny();
 
+    // IMPORTANT : Imposer le second membre à 0 pour la frontière de sortie.
+    // Car l'équation y est : 1 * P = 0.
+    for (int i = 0; i < Ny; ++i) {
+        int k_out = _grid->GetPIndex(i, Nx - 1);
+        b(k_out) = 0.0;
+    }
+
+    // Résolution
     p_sol = _solver.solve(b);
-    
-    // On remet la moyenne à 0 pour la propreté physique (optionnel mais recommandé)
-    double p_moy = p_sol.sum() / p_sol.size();
-    for(int i=0; i<p_sol.size(); ++i) p_sol(i) -= p_moy;
 }
 
 void Laplacian::ComputeGradient(const Eigen::VectorXd& p, Eigen::VectorXd& gradPx, Eigen::VectorXd& gradPy)
@@ -147,28 +148,31 @@ void Laplacian::ComputeGradient(const Eigen::VectorXd& p, Eigen::VectorXd& gradP
     double hx = _df->Get_hx();
     double hy = _df->Get_hy();
 
+    // Redimensionnement
     gradPx.resize((Nx + 1) * Ny);
     gradPy.resize(Nx * (Ny + 1));
     gradPx.setZero();
     gradPy.setZero();
 
-    // GradPx sur les faces U (internes)
+    // GradPx sur les faces U (internes : de j=1 à Nx-1)
     for (int i = 0; i < Ny; ++i) {
-        for (int j = 1; j < Nx; ++j) { 
+        for (int j = 1; j < Nx; ++j) {
             int k_u = _grid->GetUIndex(i, j);
-            int k_p_right = _grid->GetPIndex(i, j);
-            int k_p_left  = _grid->GetPIndex(i, j - 1);
-            gradPx(k_u) = (p(k_p_right) - p(k_p_left)) / hx;
+            int k_p_E = _grid->GetPIndex(i, j);
+            int k_p_W = _grid->GetPIndex(i, j - 1);
+
+            gradPx(k_u) = (p(k_p_E) - p(k_p_W)) / hx;
         }
     }
 
-    // GradPy sur les faces V (internes)
-    for (int i = 1; i < Ny; ++i) { 
+    // GradPy sur les faces V (internes : de i=1 à Ny-1)
+    for (int i = 1; i < Ny; ++i) {
         for (int j = 0; j < Nx; ++j) {
             int k_v = _grid->GetVIndex(i, j);
-            int k_p_top  = _grid->GetPIndex(i, j);
-            int k_p_bott = _grid->GetPIndex(i - 1, j);
-            gradPy(k_v) = (p(k_p_top) - p(k_p_bott)) / hy;
+            int k_p_N = _grid->GetPIndex(i, j);
+            int k_p_S = _grid->GetPIndex(i - 1, j);
+
+            gradPy(k_v) = (p(k_p_N) - p(k_p_S)) / hy;
         }
     }
 }

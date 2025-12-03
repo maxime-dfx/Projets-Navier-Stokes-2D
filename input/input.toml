@@ -3,24 +3,33 @@ xmin = 0.0
 xmax = 1.0
 ymin = 0.0
 ymax = 1.0
-hx = 0.05
-hy = 0.05
+hx = 0.02       # Maillage plus fin (50x50) pour capter la forme des vortex
+hy = 0.02
 
 [time]
 t0 = 0.0
-tfinal = 0.7
-dt = 0.0005
+tfinal = 2.0    # Temps plus long pour laisser aux vortex le temps d'interagir
+dt = 0.001      # Pas de temps ajusté (attention à la condition CFL)
 scheme = "ExplicitEuler"
 
 [physics]
 rho = 1.0
-nu = 0.1
+nu = 0.0000005      # Viscosité FAIBLE ! C'est la clé pour avoir du mouvement.
 
 [boundary]
-left   = "Dirichlet"
-right  = "Dirichlet"
+# Gauche = Vitesse imposée (Dirichlet sur U)
+left = "Dirichlet"
+left_val = 1.0      # Vitesse du vent entrant (U_in)
+
+# Droite = Sortie libre (Neumann sur U, Dirichlet sur P)
+right = "Neumann"
+right_val = 0.0     # Gradient nul
+
+# Haut/Bas = Murs solides (Dirichlet sur U et V = 0)
 bottom = "Dirichlet"
-top    = "Dirichlet"
+bottom_val = 0.0    # Vitesse paroi (0 pour mur fixe)
+top = "Dirichlet"
+top_val = 0.0       # Vitesse paroi (0 pour mur fixe)
 
 [output]
 results = "results"

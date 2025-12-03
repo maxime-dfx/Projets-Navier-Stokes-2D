@@ -19,7 +19,9 @@ EulerScheme::EulerScheme(DataFile* data_file, Laplacian* lap, MACgrid* grid) :
 TimeScheme(data_file, lap, grid)
 {}
 
-// Application des conditions aux limites
+// =========================================================================
+// APPLICATION DES CONDITIONS AUX LIMITES (Vitesse Normale / Étanchéité)
+// =========================================================================
 void TimeScheme::ApplyBoundaryConditions()
 {
     int Nx = _df->Get_Nx();
@@ -29,37 +31,48 @@ void TimeScheme::ApplyBoundaryConditions()
     VectorXd V = _grid->GetV();
     Function* fct = _grid->GetFunction();
 
-    // MURS VERTICAUX (Agit sur U)
+    // 1. MURS VERTICAUX (On impose U, la vitesse normale traversante)
     for (int i = 0; i < Ny; ++i) {
+        // Mur GAUCHE (Indice 0)
         int k_left = _grid->GetUIndex(i, 0);
-        if (fct->IsDirichletLeft()) U(k_left) = fct->GetLeftU(_grid->GetUcoord(i, 0)(1)); 
-        else U(k_left) = U(_grid->GetUIndex(i, 1)); 
+        double y_left = _grid->GetUcoord(i, 0)(1); // Coord Y
+        if (fct->IsDirichletLeft()) 
+            U(k_left) = fct->GetLeftU_Normal(y_left); 
+        else 
+            U(k_left) = U(_grid->GetUIndex(i, 1)); 
 
+        // Mur DROIT (Indice Nx)
         int k_right = _grid->GetUIndex(i, Nx);
-        if (fct->IsDirichletRight()) U(k_right) = fct->GetRightU(_grid->GetUcoord(i, Nx)(1));
-        else U(k_right) = U(_grid->GetUIndex(i, Nx - 1));
+        double y_right = _grid->GetUcoord(i, Nx)(1);
+        if (fct->IsDirichletRight()) 
+            U(k_right) = fct->GetRightU_Normal(y_right);
+        else 
+            U(k_right) = U(_grid->GetUIndex(i, Nx - 1));
     }
 
-    // MURS HORIZONTAUX (Agit sur V)
+    // 2. MURS HORIZONTAUX (On impose V, la vitesse normale traversante)
     for (int j = 0; j < Nx; ++j) {
+        // Mur BAS (Indice 0)
         int k_bott = _grid->GetVIndex(0, j);
-        if (fct->IsDirichletBottom()) V(k_bott) = fct->GetBottomV(_grid->GetVcoord(0, j)(0));
-        else V(k_bott) = V(_grid->GetVIndex(1, j));
+        double x_bott = _grid->GetVcoord(0, j)(0); // Coord X
+        if (fct->IsDirichletBottom()) 
+            V(k_bott) = fct->GetBottomV_Normal(x_bott);
+        else 
+            V(k_bott) = V(_grid->GetVIndex(1, j));
 
+        // Mur HAUT (Indice Ny)
         int k_top = _grid->GetVIndex(Ny, j);
-        if (fct->IsDirichletTop()) V(k_top) = fct->GetTopV(_grid->GetVcoord(Ny, j)(0));
-        else V(k_top) = V(_grid->GetVIndex(Ny - 1, j));
+        double x_top = _grid->GetVcoord(Ny, j)(0);
+        if (fct->IsDirichletTop()) 
+            V(k_top) = fct->GetTopV_Normal(x_top);
+        else 
+            V(k_top) = V(_grid->GetVIndex(Ny - 1, j));
     }
     _grid->SetU(U);
     _grid->SetV(V);
 }
 
-// =========================================================================
-// Fonction utilitaire pour le schéma Upwind (A mettre avant Advance)
-// =========================================================================
-// Stabilise le calcul en regardant "d'où vient le vent".
-// Si la vitesse est positive, on prend l'information de gauche (Back).
-// Si la vitesse est négative, on prend l'information de droite (Front).
+// Helper Upwind inchangé
 inline double Upwind(double vel, double val_minus, double val_center, double val_plus, double inv_h) {
     if (vel > 0) return vel * (val_center - val_minus) * inv_h;
     else return vel * (val_plus - val_center) * inv_h;
@@ -71,169 +84,155 @@ inline double Upwind(double vel, double val_minus, double val_center, double val
 
 void EulerScheme::Advance()
 {
-    // 0. Récupération des paramètres
     double dt = _df->Get_dt();
     double nu = _df->Get_nu();
     double rho = _df->Get_rho();
-    
     double hx = _df->Get_hx();
     double hy = _df->Get_hy();
     int Nx = _df->Get_Nx();
     int Ny = _df->Get_Ny();
 
-    // Pré-calcul des inverses pour la vitesse
-    double odx = 1.0 / hx;
-    double ody = 1.0 / hy;
-    double odx2 = 1.0 / (hx * hx);
-    double ody2 = 1.0 / (hy * hy);
+    double odx = 1.0 / hx; double ody = 1.0 / hy;
+    double odx2 = 1.0 / (hx*hx); double ody2 = 1.0 / (hy*hy);
 
-    // 1. Application des BC (Important pour avoir des valeurs fantômes correctes)
+    // 1. Appliquer BC Normales
     ApplyBoundaryConditions();
 
-    // Copie des champs actuels (u^n, v^n)
     VectorXd u_n = _grid->GetU();
     VectorXd v_n = _grid->GetV();
-
-    // Vecteurs prédiction (u*, v*) initialisés à u^n, v^n
     VectorXd u_star = u_n;
     VectorXd v_star = v_n;
     
     Function* fct = _grid->GetFunction();
 
     // -----------------------------------------------------------------------
-    // 2. ÉTAPE DE PRÉDICTION : u* = u^n + dt * (Diffusion - Advection)
+    // 2. PRÉDICTION U (Interne)
     // -----------------------------------------------------------------------
-
-    // --- A. Calcul pour U (Faces verticales internes : j=1 à Nx-1) ---
     for (int i = 0; i < Ny; ++i) {
         for (int j = 1; j < Nx; ++j) { 
             int k = _grid->GetUIndex(i, j);
             double u_curr = u_n(k);
-
-            // Voisins Est/Ouest (existent toujours car j est interne)
+            double x_curr = _grid->GetUcoord(i,j)(0);
+            
+            // --- DIFFUSION (Viscosité) ---
             double u_E = u_n(_grid->GetUIndex(i, j + 1));
             double u_W = u_n(_grid->GetUIndex(i, j - 1));
-
-            // Voisins Nord/Sud (Gestion Ghost Cells pour Dirichlet)
             double u_N, u_S;
             
-            // SUD (Bas)
+            // Gestion Ghost Cells VERTICALES pour U (Frottement sur mur haut/bas)
+            // U est tangent au mur du bas et du haut.
+            
+            // SUD (Mur Bas)
             if (i > 0) u_S = u_n(_grid->GetUIndex(i - 1, j));
             else { 
-                // Si mur Dirichlet (vitesse=0), le point fantôme est l'opposé : -u_curr
-                // (moyenne au mur = 0). Sinon Neumann (glissement) : u_curr.
-                u_S = fct->IsDirichletBottom() ? -u_curr : u_curr; 
+                if (fct->IsDirichletBottom()) {
+                   // Formule: (u_ghost + u_curr)/2 = u_wall  => u_ghost = 2*u_wall - u_curr
+                   double u_wall = fct->GetBottomU_Tangent(x_curr);
+                   u_S = 2.0 * u_wall - u_curr;
+                } else {
+                   u_S = u_curr; // Neumann
+                }
             }
             
-            // NORD (Haut)
+            // NORD (Mur Haut - Ex: Lid Driven)
             if (i < Ny - 1) u_N = u_n(_grid->GetUIndex(i + 1, j));
             else {
-                u_N = fct->IsDirichletTop() ? -u_curr : u_curr;
+                if (fct->IsDirichletTop()) {
+                    double u_wall = fct->GetTopU_Tangent(x_curr);
+                    u_N = 2.0 * u_wall - u_curr;
+                } else {
+                    u_N = u_curr;
+                }
             }
 
-            // --- DIFFUSION (Laplacien) ---
             double diffusion = nu * ((u_E - 2*u_curr + u_W)*odx2 + (u_N - 2*u_curr + u_S)*ody2);
 
-            // --- ADVECTION (Upwind) ---
-            
-            // Terme 1 : u * du/dx
+            // --- ADVECTION ---
             double adv_x = Upwind(u_curr, u_W, u_curr, u_E, odx);
 
-            // Terme 2 : v * du/dy (Moyenne de 4 V voisins pour avoir v au point u)
+            // Moyenne de V aux 4 coins pour l'avoir au centre de la face U
             double v_avg = 0.25 * (
-                (i < Ny ? v_n(_grid->GetVIndex(i + 1, j)) : 0.0) +     // NE
-                (i < Ny ? v_n(_grid->GetVIndex(i + 1, j - 1)) : 0.0) + // NW
-                v_n(_grid->GetVIndex(i, j)) +                          // SE
-                v_n(_grid->GetVIndex(i, j - 1))                        // SW
+                (i < Ny ? v_n(_grid->GetVIndex(i + 1, j)) : 0.0) +     
+                (i < Ny ? v_n(_grid->GetVIndex(i + 1, j - 1)) : 0.0) + 
+                v_n(_grid->GetVIndex(i, j)) +                          
+                v_n(_grid->GetVIndex(i, j - 1))                        
             );
-            
             double adv_y = Upwind(v_avg, u_S, u_curr, u_N, ody);
 
-            // Bilan U
             u_star(k) = u_curr + dt * (diffusion - (adv_x + adv_y));
         }
     }
 
-    // --- B. Calcul pour V (Faces horizontales internes : i=1 à Ny-1) ---
+    // -----------------------------------------------------------------------
+    // 3. PRÉDICTION V (Interne)
+    // -----------------------------------------------------------------------
     for (int i = 1; i < Ny; ++i) { 
         for (int j = 0; j < Nx; ++j) {
             int k = _grid->GetVIndex(i, j);
             double v_curr = v_n(k);
+            double y_curr = _grid->GetVcoord(i, j)(1);
 
-            // Voisins Nord/Sud (existent toujours)
             double v_N = v_n(_grid->GetVIndex(i + 1, j));
             double v_S = v_n(_grid->GetVIndex(i - 1, j));
-
-            // Voisins Est/Ouest (Ghost Cells)
             double v_E, v_W;
 
-            // OUEST (Gauche)
+            // Gestion Ghost Cells HORIZONTALES pour V (Frottement sur murs latéraux)
+            // V est tangent aux murs gauche/droite.
+
+            // OUEST (Mur Gauche)
             if (j > 0) v_W = v_n(_grid->GetVIndex(i, j - 1));
             else {
-                v_W = fct->IsDirichletLeft() ? -v_curr : v_curr;
+                if (fct->IsDirichletLeft()) {
+                    double v_wall = fct->GetLeftV_Tangent(y_curr);
+                    v_W = 2.0 * v_wall - v_curr;
+                } else {
+                    v_W = v_curr;
+                }
             }
 
-            // EST (Droite)
+            // EST (Mur Droit)
             if (j < Nx - 1) v_E = v_n(_grid->GetVIndex(i, j + 1));
             else {
-                v_E = fct->IsDirichletRight() ? -v_curr : v_curr;
+                if (fct->IsDirichletRight()) {
+                    double v_wall = fct->GetRightV_Tangent(y_curr);
+                    v_E = 2.0 * v_wall - v_curr;
+                } else {
+                    v_E = v_curr;
+                }
             }
 
-            // --- DIFFUSION ---
             double diffusion = nu * ((v_E - 2*v_curr + v_W)*odx2 + (v_N - 2*v_curr + v_S)*ody2);
 
-            // --- ADVECTION (Upwind) ---
-
-            // Terme 1 : v * dv/dy
             double adv_y = Upwind(v_curr, v_S, v_curr, v_N, ody);
 
-            // Terme 2 : u * dv/dx (Moyenne de 4 U voisins pour avoir u au point v)
             double u_avg = 0.25 * (
-                (j < Nx ? u_n(_grid->GetUIndex(i, j + 1)) : 0.0) +     // NE
-                u_n(_grid->GetUIndex(i, j)) +                          // NW
-                (j < Nx ? u_n(_grid->GetUIndex(i - 1, j + 1)) : 0.0) + // SE
-                u_n(_grid->GetUIndex(i - 1, j))                        // SW
+                (j < Nx ? u_n(_grid->GetUIndex(i, j + 1)) : 0.0) +     
+                u_n(_grid->GetUIndex(i, j)) +                          
+                (j < Nx ? u_n(_grid->GetUIndex(i - 1, j + 1)) : 0.0) + 
+                u_n(_grid->GetUIndex(i - 1, j))                        
             );
-
             double adv_x = Upwind(u_avg, v_W, v_curr, v_E, odx);
 
-            // Bilan V
             v_star(k) = v_curr + dt * (diffusion - (adv_x + adv_y));
         }
     }
 
     // -----------------------------------------------------------------------
-    // 3. PROJECTION (Pression)
+    // 4. PROJECTION & CORRECTION (Standard)
     // -----------------------------------------------------------------------
     
-    // Div(u*)
     VectorXd div_u_star = _lap->ComputeDivergence(u_star, v_star);
-    
-    // Solve H*p = (rho/dt) * div
     VectorXd rhs = (rho / dt) * div_u_star;
-
-    // --- DEBUG: Vérification de l'activité du solveur ---
-    // Si cette valeur est proche de 0 (ex: 1e-16), alors P restera 0.
-    // Si cette valeur est grande, P doit apparaitre.
-    // std::cout << "Time: " << _t << " | RHS Norm: " << rhs.norm() << std::endl;
-    // ----------------------------------------------------
 
     VectorXd p_next;
     _lap->Solve(rhs, p_next);
 
-    // -----------------------------------------------------------------------
-    // 4. CORRECTION : u^{n+1} = u* - (dt/rho) * Grad(p)
-    // -----------------------------------------------------------------------
     VectorXd gradPx, gradPy;
     _lap->ComputeGradient(p_next, gradPx, gradPy);
-
-    // On modifie les vecteurs prédiction pour obtenir u_next
-    // Attention : On ne touche qu'aux faces internes, les bords sont gérés par ApplyBoundaryConditions
     
     VectorXd u_next = u_star;
     VectorXd v_next = v_star;
 
-    // Correction U
     for (int i = 0; i < Ny; ++i) {
         for (int j = 1; j < Nx; ++j) {
             int k = _grid->GetUIndex(i, j);
@@ -241,7 +240,6 @@ void EulerScheme::Advance()
         }
     }
 
-    // Correction V
     for (int i = 1; i < Ny; ++i) {
         for (int j = 0; j < Nx; ++j) {
             int k = _grid->GetVIndex(i, j);
@@ -249,51 +247,66 @@ void EulerScheme::Advance()
         }
     }
 
-    // Envoi à la grille
     _grid->SetU(u_next); 
     _grid->SetV(v_next);
-    _grid->SetP(p_next); // Mise à jour de la pression pour l'affichage
+    _grid->SetP(p_next); 
 
-    // -----------------------------------------------------------------------
-    // 5. Finalisation
-    // -----------------------------------------------------------------------
-    // On ré-applique les conditions aux limites pour le pas suivant
     ApplyBoundaryConditions();
-
     _t += dt;
 }
 
+// SaveSolution reste inchangé par rapport à ta version, il est correct.
 void TimeScheme::SaveSolution(int n_iteration)
 {
     stringstream ss_dat;
     string resultsPath = _df->Get_results();
     ss_dat << resultsPath << "/sol_" << n_iteration << ".dat";
     ofstream dat(ss_dat.str());
+
     if (dat.is_open()) {
         dat.imbue(std::locale("C"));
+        
         int Nx = _df->Get_Nx();
         int Ny = _df->Get_Ny();
+        double hx = _df->Get_hx();
+        double hy = _df->Get_hy();
+        
         const VectorXd& P = _grid->GetP();
         const VectorXd& U = _grid->GetU();
         const VectorXd& V = _grid->GetV();
 
+        auto get_u_center = [&](int r, int c) {
+            return 0.5 * (U(_grid->GetUIndex(r, c)) + U(_grid->GetUIndex(r, c+1)));
+        };
+        auto get_v_center = [&](int r, int c) {
+            return 0.5 * (V(_grid->GetVIndex(r, c)) + V(_grid->GetVIndex(r+1, c)));
+        };
+
         for (int i = 0; i < Ny; ++i) {
             for (int j = 0; j < Nx; ++j) {
-                // Coordonnées du centre
-                double x = _df->Get_xmin() + (j + 0.5) * _df->Get_hx();
-                double y = _df->Get_ymin() + (i + 0.5) * _df->Get_hy();
+                double x = _df->Get_xmin() + (j + 0.5) * hx;
+                double y = _df->Get_ymin() + (i + 0.5) * hy;
                 
-                // Valeurs
                 double p_val = P(_grid->GetPIndex(i, j));
-                double u_val = 0.5 * (U(_grid->GetUIndex(i, j)) + U(_grid->GetUIndex(i, j+1)));
-                double v_val = 0.5 * (V(_grid->GetVIndex(i, j)) + V(_grid->GetVIndex(i+1, j)));
+                double u_val = get_u_center(i, j);
+                double v_val = get_v_center(i, j);
 
-                // Écriture : X Y P U V
-                dat << x << " " << y << " " << p_val << " " << u_val << " " << v_val << "\n";
+                // Calcul vorticité approximé (différences finies)
+                double dv_dx, du_dy;
+
+                if (j == 0) dv_dx = (get_v_center(i, j+1) - v_val) / hx;
+                else if (j == Nx - 1) dv_dx = (v_val - get_v_center(i, j-1)) / hx;
+                else dv_dx = (get_v_center(i, j+1) - get_v_center(i, j-1)) / (2.0 * hx);
+
+                if (i == 0) du_dy = (get_u_center(i+1, j) - u_val) / hy;
+                else if (i == Ny - 1) du_dy = (u_val - get_u_center(i-1, j)) / hy;
+                else du_dy = (get_u_center(i+1, j) - get_u_center(i-1, j)) / (2.0 * hy);
+
+                double omega = dv_dx - du_dy;
+
+                dat << x << " " << y << " " << p_val << " " << u_val << " " << v_val << " " << omega << "\n";
             }
-            // IMPORTANT pour Gnuplot : Saut de ligne à chaque fin de ligne Y
-            // pour qu'il comprenne que c'est une grille 2D
-            dat << "\n"; 
+            dat << "\n";
         }
     }
     dat.close();

@@ -9,27 +9,40 @@ class Function {
 private:
     DataFile* _df;
 
+    // Helper pour condition initiale
+    double ComputeSingleVortex(double x, double y, double x0, double y0, double R, double A, bool is_u);
+
 public:
     Function(DataFile* data_file); 
 
-    // Conditions Initiales (Vitesse à t=0)
+    // Conditions Initiales (t=0)
     double InitialConditionU(double x, double y);
     double InitialConditionV(double x, double y);
 
     // --- LOGIQUE CONDITIONNELLE ---
-    // Vérifie si le bord est un mur solide (Dirichlet) ou une sortie (Neumann)
     bool IsDirichletLeft()   const { return _df->Get_BC_Left() == "Dirichlet"; } 
     bool IsDirichletRight()  const { return _df->Get_BC_Right() == "Dirichlet"; }
     bool IsDirichletBottom() const { return _df->Get_BC_Bottom() == "Dirichlet"; }
     bool IsDirichletTop()    const { return _df->Get_BC_Top() == "Dirichlet"; } 
 
-    // --- VALEURS IMPOSÉES AUX MURS (Dirichlet) ---
-    // Pour l'instant : murs fixes (vitesse = 0)
-    // Si vous voulez une "Cavité Entrainée" (Lid-Driven), mettez GetTopU = 1.0 (attention à TimeScheme)
-    double GetLeftU(double y)   const { return 0.0; }
-    double GetRightU(double y)  const { return 0.0; }
-    double GetBottomV(double x) const { return 0.0; }
-    double GetTopV(double x)    const { return 0.0; } 
+    // --- VITESSES NORMALES (Traversée du mur) ---
+    // Pour des murs solides, c'est toujours 0.0.
+    double GetLeftU_Normal(double y)   const { return _df->Get_BC_Left_dir(); }    
+    double GetRightU_Normal(double y)  const { return 0.0; } // Non utilisé si Neumann à droite
+    double GetBottomV_Normal(double x) const { return 0.0; } // Mur étanche
+    double GetTopV_Normal(double x)    const { return 0.0; } // Mur étanche
+
+    // --- VITESSES TANGENTIELLES (Glissement du mur) ---
+    // C'est ici qu'on utilise les valeurs du fichier input.
+    // Ex: Lid-Driven Cavity -> Le mur du haut glisse.
+    
+    // Mur Gauche/Droit : La vitesse tangentielle est V (Verticale)
+    double GetLeftV_Tangent(double y)   const { return _df->Get_BC_Left_dir(); }
+    double GetRightV_Tangent(double y)  const { return _df->Get_BC_Right_dir(); } 
+
+    // Mur Bas/Haut : La vitesse tangentielle est U (Horizontale)
+    double GetBottomU_Tangent(double x) const { return _df->Get_BC_Bottom_dir(); } // Correction: Bottom
+    double GetTopU_Tangent(double x)    const { return _df->Get_BC_Top_dir(); }    // Correction: Top
 };
 
 #endif
